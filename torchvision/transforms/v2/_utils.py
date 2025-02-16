@@ -4,7 +4,7 @@ import collections.abc
 import numbers
 from contextlib import suppress
 
-from typing import Any, Callable, Dict, List, Literal, Sequence, Tuple, Type, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Tuple, Type, Union
 
 import PIL.Image
 import torch
@@ -139,7 +139,9 @@ def _find_labels_default_heuristic(inputs: Any) -> torch.Tensor:
     return inputs[candidate_key]
 
 
-def _parse_labels_getter(labels_getter: Union[str, Callable[[Any], Any], None]) -> Callable[[Any], Any]:
+def _parse_labels_getter(
+    labels_getter: Union[str, Callable[[Any], Optional[torch.Tensor]], None]
+) -> Callable[[Any], Optional[torch.Tensor]]:
     if labels_getter == "default":
         return _find_labels_default_heuristic
     elif callable(labels_getter):
@@ -151,10 +153,6 @@ def _parse_labels_getter(labels_getter: Union[str, Callable[[Any], Any], None]) 
 
 
 def get_bounding_boxes(flat_inputs: List[Any]) -> tv_tensors.BoundingBoxes:
-    """Return the Bounding Boxes in the input.
-
-    Assumes only one ``BoundingBoxes`` object is present.
-    """
     # This assumes there is only one bbox per sample as per the general convention
     try:
         return next(inpt for inpt in flat_inputs if isinstance(inpt, tv_tensors.BoundingBoxes))
@@ -163,7 +161,6 @@ def get_bounding_boxes(flat_inputs: List[Any]) -> tv_tensors.BoundingBoxes:
 
 
 def query_chw(flat_inputs: List[Any]) -> Tuple[int, int, int]:
-    """Return Channel, Height, and Width."""
     chws = {
         tuple(get_dimensions(inpt))
         for inpt in flat_inputs
@@ -178,7 +175,6 @@ def query_chw(flat_inputs: List[Any]) -> Tuple[int, int, int]:
 
 
 def query_size(flat_inputs: List[Any]) -> Tuple[int, int]:
-    """Return Height and Width."""
     sizes = {
         tuple(get_size(inpt))
         for inpt in flat_inputs

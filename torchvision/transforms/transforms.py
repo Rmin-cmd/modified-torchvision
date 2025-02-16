@@ -54,6 +54,8 @@ __all__ = [
     "RandomAutocontrast",
     "RandomEqualize",
     "ElasticTransform",
+    "RGB2HSV",
+    "RGB2LAB"
 ]
 
 
@@ -1575,6 +1577,33 @@ class Grayscale(torch.nn.Module):
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(num_output_channels={self.num_output_channels})"
 
+class RGB2HSV(torch.nn.Module):
+    
+    """
+    Convert the RGB image to the HSV color model
+    """
+    
+    def __init__(self, num_output_channels=1):
+        super().__init__()
+        _log_api_usage_once(self)
+        
+    def forward(self, img):
+        
+        return F.rgb_to_hsv(img)
+
+
+class RGB2LAB(torch.nn.Module):
+    """
+    Convert the RGB image to the HSV color model
+    """
+
+    def __init__(self, num_output_channels=1):
+        super().__init__()
+        _log_api_usage_once(self)
+
+    def forward(self, img):
+        return F.rgb_to_lab(img)
+
 
 class RandomGrayscale(torch.nn.Module):
     """Randomly convert image to grayscale with a probability of p (default 0.1).
@@ -1649,9 +1678,9 @@ class RandomErasing(torch.nn.Module):
             raise TypeError("Argument value should be either a number or str or a sequence")
         if isinstance(value, str) and value != "random":
             raise ValueError("If value is str, it should be 'random'")
-        if not isinstance(scale, Sequence):
+        if not isinstance(scale, (tuple, list)):
             raise TypeError("Scale should be a sequence")
-        if not isinstance(ratio, Sequence):
+        if not isinstance(ratio, (tuple, list)):
             raise TypeError("Ratio should be a sequence")
         if (scale[0] > scale[1]) or (ratio[0] > ratio[1]):
             warnings.warn("Scale and ratio should be of kind (min, max)")

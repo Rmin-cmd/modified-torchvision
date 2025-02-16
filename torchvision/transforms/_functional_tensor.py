@@ -45,8 +45,6 @@ def _max_value(dtype: torch.dtype) -> int:
         return 127
     elif dtype == torch.int16:
         return 32767
-    elif dtype == torch.uint16:
-        return 65535
     elif dtype == torch.int32:
         return 2147483647
     elif dtype == torch.int64:
@@ -221,6 +219,7 @@ def adjust_hue(img: Tensor, hue_factor: float) -> Tensor:
     return convert_image_dtype(img_hue_adj, orig_dtype)
 
 
+
 def adjust_saturation(img: Tensor, saturation_factor: float) -> Tensor:
     if saturation_factor < 0:
         raise ValueError(f"saturation_factor ({saturation_factor}) is not non-negative.")
@@ -300,6 +299,45 @@ def _rgb2hsv(img: Tensor) -> Tensor:
     return torch.stack((h, s, maxc), dim=-3)
 
 
+def _rgb2lab(img: Tensor) -> Tensor:
+    # Constants for the transformation
+    D65 = torch.tensor([0.95047, 1.0, 1.08883], dtype=img.dtype, device=img.device)  # Reference white point for D65
+
+    # Step 1: Convert RGB to XYZ
+    r, g, b = img.unbind(dim=-3)
+
+    # Normalize RGB values to [0, 1] if not already
+    r = torch.where(r > 0.04045, torch.pow((r + 0.055) / 1.055, 2.4), r / 12.92)
+    g = torch.where(g > 0.04045, torch.pow((g + 0.055) / 1.055, 2.4), g / 12.92)
+    b = torch.where(b > 0.04045, torch.pow((b + 0.055) / 1.055, 2.4), b / 12.92)
+
+    # Convert to the XYZ color space
+    X = r * 0.4124564 + g * 0.3575761 + b * 0.1804375
+    Y = r * 0.2126729 + g * 0.7151522 + b * 0.0721750
+    Z = r * 0.0193339 + g * 0.1191920 + b * 0.9503041
+
+    # Normalize by the D65 white point
+    X = X / D65[0]
+    Y = Y / D65[1]
+    Z = Z / D65[2]
+
+    # Step 2: Convert XYZ to LAB
+    def f(t):
+        delta = 6 / 29
+        return torch.where(t > delta ** 3, torch.pow(t, 1 / 3), t / (3 * delta ** 2) + 4 / 29)
+
+    fX = f(X)
+    fY = f(Y)
+    fZ = f(Z)
+
+    L = 116 * fY - 16
+    a = 500 * (fX - fY)
+    b = 200 * (fY - fZ)
+
+    # Stack the LAB channels and return
+    return torch.stack((L, a, b), dim=-3)
+
+
 def _hsv2rgb(img: Tensor) -> Tensor:
     h, s, v = img.unbind(dim=-3)
     i = torch.floor(h * 6.0)
@@ -319,6 +357,43 @@ def _hsv2rgb(img: Tensor) -> Tensor:
     a4 = torch.stack((a1, a2, a3), dim=-4)
 
     return torch.einsum("...ijk, ...xijk -> ...xjk", mask.to(dtype=img.dtype), a4)
+
+def _lab2rgb(img: Tensor) -> Tensor:
+    # Constants for the transformation
+    D65 = torch.tensor([0.95047, 1.0, 1.08883], dtype=img.dtype, device=img.device)  # Reference white point for D65
+
+    # Step 1: Convert LAB to XYZ
+    L, a, b = img.unbind(dim=-3)
+    delta = 6 / 29
+
+    def f_inv(t):
+        return torch.where(t > delta, t**3, 3 * delta**2 * (t - 4 / 29))
+
+    fY = (L + 16) / 116
+    fX = fY + a / 500
+    fZ = fY - b / 200
+
+    X = f_inv(fX) * D65[0]
+    Y = f_inv(fY) * D65[1]
+    Z = f_inv(fZ) * D65[2]
+
+    # Step 2: Convert XYZ to RGB
+    r = X * 3.2404542 + Y * -1.5371385 + Z * -0.4985314
+    g = X * -0.9692660 + Y * 1.8760108 + Z * 0.0415560
+    b = X * 0.0556434 + Y * -0.2040259 + Z * 1.0572252
+
+    # Clip the values to the range [0, 1] before applying gamma correction
+    r = torch.clamp(r, 0.0, 1.0)
+    g = torch.clamp(g, 0.0, 1.0)
+    b = torch.clamp(b, 0.0, 1.0)
+
+    # Apply gamma correction
+    r = torch.where(r > 0.0031308, 1.055 * torch.pow(r, 1 / 2.4) - 0.055, 12.92 * r)
+    g = torch.where(g > 0.0031308, 1.055 * torch.pow(g, 1 / 2.4) - 0.055, 12.92 * g)
+    b = torch.where(b > 0.0031308, 1.055 * torch.pow(b, 1 / 2.4) - 0.055, 12.92 * b)
+
+    # Stack the RGB channels and return
+    return torch.stack((r, g, b), dim=-3)
 
 
 def _pad_symmetric(img: Tensor, padding: List[int]) -> Tensor:
@@ -724,10 +799,10 @@ def perspective(
     return _apply_grid_transform(img, grid, interpolation, fill=fill)
 
 
-def _get_gaussian_kernel1d(kernel_size: int, sigma: float, dtype: torch.dtype, device: torch.device) -> Tensor:
+def _get_gaussian_kernel1d(kernel_size: int, sigma: float) -> Tensor:
     ksize_half = (kernel_size - 1) * 0.5
 
-    x = torch.linspace(-ksize_half, ksize_half, steps=kernel_size, dtype=dtype, device=device)
+    x = torch.linspace(-ksize_half, ksize_half, steps=kernel_size)
     pdf = torch.exp(-0.5 * (x / sigma).pow(2))
     kernel1d = pdf / pdf.sum()
 
@@ -737,8 +812,8 @@ def _get_gaussian_kernel1d(kernel_size: int, sigma: float, dtype: torch.dtype, d
 def _get_gaussian_kernel2d(
     kernel_size: List[int], sigma: List[float], dtype: torch.dtype, device: torch.device
 ) -> Tensor:
-    kernel1d_x = _get_gaussian_kernel1d(kernel_size[0], sigma[0], dtype, device)
-    kernel1d_y = _get_gaussian_kernel1d(kernel_size[1], sigma[1], dtype, device)
+    kernel1d_x = _get_gaussian_kernel1d(kernel_size[0], sigma[0]).to(device, dtype=dtype)
+    kernel1d_y = _get_gaussian_kernel1d(kernel_size[1], sigma[1]).to(device, dtype=dtype)
     kernel2d = torch.mm(kernel1d_y[:, None], kernel1d_x[None, :])
     return kernel2d
 
